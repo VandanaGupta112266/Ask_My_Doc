@@ -13,3 +13,7 @@ pydantic
 python-dotenv
 pypdf
 langchain-huggingface
+unstructured
+markdown
+PyYAML
+
