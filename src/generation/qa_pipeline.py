@@ -6,6 +6,7 @@ from langchain_core.documents import Document
 from src.generation.prompt_loader import load_prompt
 from src.retrieval.vector_store import get_vector_store, get_hybrid_retriever
 from src.retrieval.reranker import Reranker
+from langfuse import observe
 
 load_dotenv()
 
@@ -30,6 +31,7 @@ def get_reranker():
         _reranker = Reranker()
     return _reranker
 
+@observe()
 def is_greeting_or_general(query: str) -> bool:
     """Uses a fast-pass check then an LLM to decide if a query is general."""
     # Fast-pass for common short greetings
@@ -55,6 +57,7 @@ def is_greeting_or_general(query: str) -> bool:
         print(f"Routing Error: {e}")
         return False
 
+@observe()
 def generate_answer(query: str, vector_store=None) -> tuple[str, list[Document]]:
     """Generates an answer using a Router + (Hybrid Search + Reranking)."""
     

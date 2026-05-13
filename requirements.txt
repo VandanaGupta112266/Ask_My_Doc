@@ -16,4 +16,5 @@ langchain-huggingface
 unstructured
 markdown
 PyYAML
+eval_type_backport
 
