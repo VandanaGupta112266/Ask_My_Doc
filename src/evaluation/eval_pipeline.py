@@ -10,6 +10,7 @@ from ragas.metrics import (
     context_precision,
 )
 from src.generation.qa_pipeline import generate_answer, get_llm
+from langfuse import langfuse_context
 from src.retrieval.vector_store import get_vector_store, get_embeddings
 from dotenv import load_dotenv
 
@@ -31,11 +32,17 @@ def run_evaluation(dataset_path="data/eval/golden_dataset.json"):
     
     vector_store = get_vector_store()
     
-    # 3. Run Pipeline for each question
-    for entry in golden_data:
+    # 3. Collect RAG answers for each question (Test: 1 question only)
+    for entry in golden_data[:1]:
         question = entry["question"]
         q_type = entry.get("type", "standard")
         print(f"\nEvaluating [{q_type}]: {question}")
+        
+        # Tag the trace in Langfuse
+        langfuse_context.update_current_trace(
+            tags=["evaluation"],
+            metadata={"question_type": q_type, "dataset": "golden_dataset_v1"}
+        )
         
         # Get answer and retrieved chunks
         answer, chunks = generate_answer(question, vector_store)
@@ -93,14 +100,29 @@ def run_evaluation(dataset_path="data/eval/golden_dataset.json"):
     
     # Calculate averages
     print("\n--- Global Averages ---")
-    for metric, score in result.scores.items():
+    for metric, score in result.items():
         print(f"{metric}: {score:.4f}")
     
     # Save to CSV for tracking
-    report_path = "data/eval/baseline_report.csv"
+    report_path_csv = "data/eval/baseline_report.csv"
+    report_path_json = "data/eval/baseline_report.json"
     os.makedirs("data/eval", exist_ok=True)
-    df.to_csv(report_path, index=False)
-    print(f"\nFull report saved to: {report_path}")
+    
+    # Save CSV
+    df.to_csv(report_path_csv, index=False)
+    
+    # Save JSON (more structured)
+    report_data = {
+        "timestamp": datetime.now().isoformat(),
+        "global_averages": {metric: float(score) for metric, score in result.items()},
+        "detailed_results": df.to_dict(orient="records")
+    }
+    with open(report_path_json, "w") as f:
+        json.dump(report_data, f, indent=4)
+        
+    print(f"\nFull report saved to:")
+    print(f"- CSV: {report_path_csv}")
+    print(f"- JSON: {report_path_json}")
 
 if __name__ == "__main__":
     run_evaluation()

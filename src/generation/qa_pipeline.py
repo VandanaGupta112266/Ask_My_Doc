@@ -6,7 +6,7 @@ from langchain_core.documents import Document
 from src.generation.prompt_loader import load_prompt
 from src.retrieval.vector_store import get_vector_store, get_hybrid_retriever
 from src.retrieval.reranker import Reranker
-from langfuse import observe
+from langfuse import observe, langfuse_context
 
 load_dotenv()
 
@@ -31,7 +31,6 @@ def get_reranker():
         _reranker = Reranker()
     return _reranker
 
-@observe()
 def is_greeting_or_general(query: str) -> bool:
     """Uses a fast-pass check then an LLM to decide if a query is general."""
     # Fast-pass for common short greetings
@@ -102,10 +101,27 @@ def generate_answer(query: str, vector_store=None) -> tuple[str, list[Document]]
     
     print("Generating answer with LLM...")
     try:
+        # Update trace with metadata
+        langfuse_context.update_current_trace(
+            name="RAG Answer Generation",
+            tags=["production" if os.environ.get("ENV") == "prod" else "development"],
+            metadata={"model": "minimax-m2.5", "temperature": 0.7}
+        )
+        
         response = chain.invoke({
             "context": context_text,
             "question": query
         })
+        
+        # Capture model parameters and usage
+        langfuse_context.update_current_observation(
+            model="minimax/minimax-m2.5:free",
+            usage={
+                "input": len(context_text + query) // 4,  # Rough token estimate
+                "output": len(response.content) // 4
+            }
+        )
+        
         return response.content, final_chunks
     except Exception as e:
         return f"Error communicating with LLM: {str(e)}", []
