@@ -23,9 +23,15 @@ class Reranker:
         # Sort by score in descending order
         sorted_docs = sorted(doc_scores, key=lambda x: x[1], reverse=True)
         
-        # Return only the top_n documents
+        # Return only the top_n documents and attach score to metadata
         print(f"Reranked {len(documents)} documents. Top score: {sorted_docs[0][1]:.4f}")
-        return [doc for doc, score in sorted_docs[:top_n]]
+        
+        final_docs = []
+        for doc, score in sorted_docs[:top_n]:
+            doc.metadata["re_score"] = float(score)
+            final_docs.append(doc)
+            
+        return final_docs
 
 if __name__ == "__main__":
     # Test reranker

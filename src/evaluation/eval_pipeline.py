@@ -10,12 +10,13 @@ from ragas.metrics import (
     context_precision,
 )
 from src.generation.qa_pipeline import generate_answer, get_llm
-from langfuse import langfuse_context
+from langfuse.decorators import observe, langfuse_context
 from src.retrieval.vector_store import get_vector_store, get_embeddings
 from dotenv import load_dotenv
 
 load_dotenv()
 
+@observe()
 def run_evaluation(dataset_path="data/eval/golden_dataset.json"):
     print(f"--- Starting Evaluation on {dataset_path} ---")
     
@@ -29,20 +30,23 @@ def run_evaluation(dataset_path="data/eval/golden_dataset.json"):
     contexts = []
     ground_truths = []
     question_types = []
+    trace_ids = []
     
     vector_store = get_vector_store()
     
-    # 3. Collect RAG answers for each question (Test: 1 question only)
+    # 3. Collect RAG answers for each question
     for entry in golden_data[:1]:
         question = entry["question"]
         q_type = entry.get("type", "standard")
         print(f"\nEvaluating [{q_type}]: {question}")
         
-        # Tag the trace in Langfuse
+        # Tag the trace in Langfuse and get its ID
         langfuse_context.update_current_trace(
             tags=["evaluation"],
-            metadata={"question_type": q_type, "dataset": "golden_dataset_v1"}
+            metadata={"question_type": q_type}
         )
+        current_trace_id = langfuse_context.get_current_trace_id()
+        trace_ids.append(current_trace_id)
         
         # Get answer and retrieved chunks
         answer, chunks = generate_answer(question, vector_store)
@@ -71,6 +75,9 @@ def run_evaluation(dataset_path="data/eval/golden_dataset.json"):
     # We use our OpenRouter LLM for evaluation as well
     eval_llm = get_llm()
     
+    # Pro-Tip: For free-tier LLMs, we MUST run with small batch sizes 
+    # and longer timeouts to avoid 429s and TimeoutErrors.
+    # Run evaluation (removing incompatible is_async parameter)
     result = evaluate(
         dataset,
         metrics=[
@@ -80,12 +87,26 @@ def run_evaluation(dataset_path="data/eval/golden_dataset.json"):
             context_precision,
         ],
         llm=eval_llm,
-        embeddings=get_embeddings(),
-        raise_exceptions=False
+        embeddings=get_embeddings()
     )
     
-    # 6. Report Results
+    # 6. Push Scores to Langfuse Dashboard
     df = result.to_pandas()
+    print("\n--- Syncing Scores to Langfuse Dashboard ---")
+    
+    for i, trace_id in enumerate(trace_ids):
+        for metric in ["faithfulness", "answer_relevancy", "context_recall", "context_precision"]:
+            if metric in df.columns:
+                score_val = df.iloc[i][metric]
+                if not pd.isna(score_val):
+                    # Use the underlying client instance for specific trace scoring
+                    langfuse_context.client_instance.score(
+                        name=metric,
+                        value=float(score_val),
+                        trace_id=trace_id
+                    )
+    
+    # 6. Report Results
     print("\n--- Evaluation Summary ---")
     
     # Safe column access: only print columns that actually exist in the result
@@ -98,9 +119,12 @@ def run_evaluation(dataset_path="data/eval/golden_dataset.json"):
         print("Detailed results:")
         print(df.head())
     
-    # Calculate averages
+    # Calculate averages from the dataframe (Most robust way)
     print("\n--- Global Averages ---")
-    for metric, score in result.items():
+    numeric_df = df.select_dtypes(include=['number'])
+    averages = numeric_df.mean().to_dict()
+    
+    for metric, score in averages.items():
         print(f"{metric}: {score:.4f}")
     
     # Save to CSV for tracking
@@ -112,9 +136,10 @@ def run_evaluation(dataset_path="data/eval/golden_dataset.json"):
     df.to_csv(report_path_csv, index=False)
     
     # Save JSON (more structured)
+    import datetime
     report_data = {
-        "timestamp": datetime.now().isoformat(),
-        "global_averages": {metric: float(score) for metric, score in result.items()},
+        "timestamp": datetime.datetime.now().isoformat(),
+        "global_averages": averages,
         "detailed_results": df.to_dict(orient="records")
     }
     with open(report_path_json, "w") as f:

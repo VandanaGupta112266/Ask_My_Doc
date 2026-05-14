@@ -6,7 +6,7 @@ from langchain_core.documents import Document
 from src.generation.prompt_loader import load_prompt
 from src.retrieval.vector_store import get_vector_store, get_hybrid_retriever
 from src.retrieval.reranker import Reranker
-from langfuse import observe, langfuse_context
+from langfuse.decorators import observe, langfuse_context
 
 load_dotenv()
 
@@ -17,9 +17,11 @@ def get_llm():
         print("Warning: OPENROUTER_API_KEY is not set.")
         
     return ChatOpenAI(
-        model="minimax/minimax-m2.5:free",
-        api_key=api_key,
-        base_url="https://openrouter.ai/api/v1",
+        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+        openai_api_base="https://openrouter.ai/api/v1",
+        temperature=0.0,
+        request_timeout=180  # Increased timeout for slow free-tier responses
     )
 
 # Global reranker instance (initialized on first use)
@@ -60,8 +62,16 @@ def is_greeting_or_general(query: str) -> bool:
 def generate_answer(query: str, vector_store=None) -> tuple[str, list[Document]]:
     """Generates an answer using a Router + (Hybrid Search + Reranking)."""
     
-    # 1. Intent Routing (Absolute First Step)
+    # 1. Start Pipeline
     print(f"\n--- New Request: {query} ---")
+    
+    # Update trace with professional metadata
+    langfuse_context.update_current_trace(
+        name="Production RAG Query",
+        tags=["development"],
+        metadata={"model": "minimax-m2.5"}
+    )
+    
     print("Step 1: Routing Query...")
     if is_greeting_or_general(query):
         print("Result: General Conversation - Skipping Retrieval")
@@ -101,13 +111,6 @@ def generate_answer(query: str, vector_store=None) -> tuple[str, list[Document]]
     
     print("Generating answer with LLM...")
     try:
-        # Update trace with metadata
-        langfuse_context.update_current_trace(
-            name="RAG Answer Generation",
-            tags=["production" if os.environ.get("ENV") == "prod" else "development"],
-            metadata={"model": "minimax-m2.5", "temperature": 0.7}
-        )
-        
         response = chain.invoke({
             "context": context_text,
             "question": query
@@ -117,8 +120,12 @@ def generate_answer(query: str, vector_store=None) -> tuple[str, list[Document]]
         langfuse_context.update_current_observation(
             model="minimax/minimax-m2.5:free",
             usage={
-                "input": len(context_text + query) // 4,  # Rough token estimate
+                "input": len(context_text + query) // 4,
                 "output": len(response.content) // 4
+            },
+            metadata={
+                "top_rerank_score": float(final_chunks[0].metadata.get('re_score', 0)) if final_chunks else 0,
+                "chunks_retrieved": len(final_chunks)
             }
         )
         
