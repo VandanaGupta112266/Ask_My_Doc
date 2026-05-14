@@ -11,29 +11,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.9'
+        cache: 'pip' # Speeds up future runs by 2x!
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        # Ensure the backport is installed for Python 3.9 compatibility
         pip install eval_type_backport
 
     - name: Run RAGAS Evaluation
       env:
         OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        # Add other env vars if needed for retrieval
+        LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+        LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        LANGFUSE_HOST: "https://us.cloud.langfuse.com"
+        PYTHONPATH: ${{ github.workspace }}
       run: |
-        export PYTHONPATH=$PYTHONPATH:.
         python src/evaluation/eval_pipeline.py
 
     - name: Check Quality Gate
+      env:
+        PYTHONPATH: ${{ github.workspace }}
       run: |
-        export PYTHONPATH=$PYTHONPATH:.
         python src/evaluation/quality_gate.py
